@@ -43,7 +43,10 @@ fn connect_rtpbin_srcpad(src_pad: &gstreamer::Pad, sink: &gstreamer::Element) ->
 
     match pt {
         100 => {
+            println!("LOL 100 YAY!");
             let sinkpad = static_pad(sink, "sink")?;
+            println!("SINK PAD IS: {:?}", sinkpad );
+            println!("SRC PAD IS: {:?}", src_pad );
             src_pad.link(&sinkpad)?;
             Ok(())
         }
@@ -79,14 +82,14 @@ fn run_pipeline() -> Result<(), Error> {
     let rtpbin = gstreamer::ElementFactory::make("rtpbin", Some("RTPBin"))
                                             .map_err(|_| MissingElement("UDPSrc"))?;
 
-    let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay", Some("RTP Opus Depay"))
-                                                  .map_err(|_| MissingElement("UDPSrc"))?;
+    //let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay", Some("RTP Opus Depay"))
+    //                                              .map_err(|_| MissingElement("UDPSrc"))?;
 
-    let opusparsein = gstreamer::ElementFactory::make("opusparse", Some("Opus Input Parser"))
-                                                 .map_err(|_| MissingElement("UDPSrc"))?;
+    //let opusparsein = gstreamer::ElementFactory::make("opusparse", Some("Opus Input Parser"))
+    //                                             .map_err(|_| MissingElement("UDPSrc"))?;
 
-    let opusdec = gstreamer::ElementFactory::make("opusdec", Some("Opus Decode"))
-                                             .map_err(|_| MissingElement("UDPSrc"))?;
+    //let opusdec = gstreamer::ElementFactory::make("opusdec", Some("Opus Decode"))
+    //                                         .map_err(|_| MissingElement("UDPSrc"))?;
 
     let audiomixer = gstreamer::ElementFactory::make("audiomixer", Some("Audio Mixer"))
                                                 .map_err(|_| MissingElement("UDPSrc"))?;
@@ -121,9 +124,9 @@ fn run_pipeline() -> Result<(), Error> {
         pipeline.add_many(&[&src,
                             &queue,
                             &rtpbin,
-                            &rtpopusdepay,
-                            &opusparsein,
-                            &opusdec,
+                            //&rtpopusdepay,
+                            //&opusparsein,
+                            //&opusdec,
                             &audiomixer,
                             &opusenc,
                             &opusparseout,
@@ -142,15 +145,12 @@ fn run_pipeline() -> Result<(), Error> {
                                         &rtpbin
                                         ])?;
 
-        gstreamer::Element::link_many(&[&rtpopusdepay,
-                                        &opusparsein,
-                                        &opusdec,
-                                        &audiomixer,
-                                        &opusenc,
-                                        &opusparseout,
-                                        &oggmux,
-                                        &filesink
-                                        ])?;
+        //gstreamer::Element::link_many(&[&audiomixer,
+        //                                &opusenc,
+        //                                &opusparseout,
+        //                                &oggmux,
+        //                                &filesink
+        //                                ])?;
 
 
  //Set action to take when payload type is known to rtpbin
@@ -183,11 +183,16 @@ fn run_pipeline() -> Result<(), Error> {
 
  //Set action to take when pad is added to rtpbin
  // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
-        let clonepipe = pipeline.clone();	
+        let pipeline_weak = pipeline.downgrade();
  rtpbin.connect_pad_added(
    move |rtpbin, src_pad| {
         println!("New source pad added to RTPBin");
         println!("Creating new elements to handle new RTP stream");
+
+        let pipeline_strong = match pipeline_weak.upgrade() {
+                     Some(pipeline) => pipeline,
+                     None => return
+         };
   
         //Make rtpopusdepay, opus parsein, opusdec elements
         let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay", Some("RTP Opus Depay"))
@@ -197,16 +202,21 @@ fn run_pipeline() -> Result<(), Error> {
         let opusdec = gstreamer::ElementFactory::make("opusdec", Some("Opus Decode"))
                       .expect("Can not make opus decoder for new RTP media");
 
-        clonepipe.add_many(&[&rtpopusdepay,
-                            &opusparsein,
-                            &opusdec])
+        pipeline_strong.add_many(&[&rtpopusdepay,
+                                   &opusparsein,
+                                   &opusdec])
                 .expect("Can not add elements to pipeline!");
 
         gstreamer::Element::link_many(&[&rtpopusdepay,
                                         &opusparsein,
                                         &opusdec,
-                                        &audiomixer
+                                        &audiomixer,
+                                        &opusenc,
+                                        &opusparseout,
+                                        &oggmux,
+                                        &filesink
                                         ]);
+
 
         //Connect sourcepad to depayloader
         match connect_rtpbin_srcpad(src_pad, &rtpopusdepay) {
@@ -220,6 +230,15 @@ fn run_pipeline() -> Result<(), Error> {
                 );
             }
         }
+
+        rtpopusdepay.sync_state_with_parent();
+        opusparsein.sync_state_with_parent();
+        opusdec.sync_state_with_parent();
+        audiomixer.sync_state_with_parent();
+        opusenc.sync_state_with_parent();
+        opusparseout.sync_state_with_parent();
+        oggmux.sync_state_with_parent();
+        filesink.sync_state_with_parent();
     });
 
 
