@@ -71,22 +71,8 @@ fn run_pipeline() -> Result<(), Error> {
 
     let pipeline = gstreamer::Pipeline::new(Some("TestPipeline"));
 
-    //Create 7 inputs to the mediapipe
-    //TODO: Find out how to make one port handle each room
-    let src1 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1925"))
+    let src = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1925"))
                                          .map_err(|_| MissingElement("UDPSrc"))?;
-    //let src2 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1926"))
-    //                                     .map_err(|_| MissingElement("UDPSrc"))?;
-    //let src3 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1927"))
-    //                                     .map_err(|_| MissingElement("UDPSrc"))?;
-    //let src4 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1928"))
-    //                                     .map_err(|_| MissingElement("UDPSrc"))?;
-    //let src5 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1929"))
-    //                                     .map_err(|_| MissingElement("UDPSrc"))?;
-    //let src6 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1930"))
-    //                                     .map_err(|_| MissingElement("UDPSrc"))?;
-    //let src7 = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src 1931"))
-    //                                     .map_err(|_| MissingElement("UDPSrc"))?;
 
     //Create rtpbin that can accept multiple rtp sessions
     let rtpbin = gstreamer::ElementFactory::make("rtpbin", Some("RTPBin"))
@@ -107,38 +93,20 @@ fn run_pipeline() -> Result<(), Error> {
 
 
     // Configure elements
-    let audioCaps =  gstreamer::Caps::builder("application/x-rtp")
+    let audio_caps =  gstreamer::Caps::builder("application/x-rtp")
                                       .field("media", "audio")
                                       .field("clock-rate", 48000)
                                       .field("encoding-name", "OPUS")
                                       .build();
-    src1.set_property("port", 1925); //TODO: Get this from signaling
-    //src2.set_property("port", 1926);
-    //src3.set_property("port", 1927);
-    //src4.set_property("port", 1928);
-    //src5.set_property("port", 1929);
-    //src6.set_property("port", 1930);
-    //src7.set_property("port", 1931);
-    src1.set_property("caps", &audioCaps);
-    //src2.set_property("caps", &audioCaps);
-    //src3.set_property("caps", &audioCaps);
-    //src4.set_property("caps", &audioCaps);
-    //src5.set_property("caps", &audioCaps);
-    //src6.set_property("caps", &audioCaps);
-    //src7.set_property("caps", &audioCaps);
+    src.set_property("port", 1925)?; //TODO: Get this from signaling
+    src.set_property("caps", &audio_caps)?;
     
     //TODO: Hook this into mediasoup
-    filesink.set_property("location", "rust.ogg");
+    filesink.set_property("location", "rust.ogg")?;
        
 
     // Add elements to the pipeline
-    pipeline.add_many(&[&src1,
-                        //&src2,
-                        //&src3,
-                        //&src4,
-                        //&src5,
-                        //&src6,
-                        //&src7,
+    pipeline.add_many(&[&src,
                         &rtpbin,
                         &audiomixer,
                         &opusenc,
@@ -149,27 +117,9 @@ fn run_pipeline() -> Result<(), Error> {
 
     // Link the elements to other elements
     // Each udpsrc should connect to rtpbin
-    gstreamer::Element::link_many(&[&src1,
+    gstreamer::Element::link_many(&[&src,
                                     &rtpbin
                                     ])?;
-    //gstreamer::Element::link_many(&[&src2,
-    //                                &rtpbin
-    //                                ])?;
-    //gstreamer::Element::link_many(&[&src3,
-    //                                &rtpbin
-    //                                ])?;
-    //gstreamer::Element::link_many(&[&src4,
-    //                                &rtpbin
-    //                                ])?;
-    //gstreamer::Element::link_many(&[&src5,
-    //                                &rtpbin
-    //                                ])?;
-    //gstreamer::Element::link_many(&[&src6,
-    //                                &rtpbin
-    //                                ])?;
-    //gstreamer::Element::link_many(&[&src7,
-    //                                &rtpbin
-    //                                ])?;
 
     // Respond to determining payload type (audio, video)
     rtpbin.connect("request-pt-map", false, |values| {
@@ -196,24 +146,13 @@ fn run_pipeline() -> Result<(), Error> {
             ),
             _ => None,
         }
-    });
+    })?;
 
 
-    rtpbin.connect( "on-new-ssrc", false, |values| { 
-      println!("NEW SRC!!");
-        //let session = values[1];
-        //let ssrc = values[2];
-        //match values[1] {
-        //    _ => None,
-        //}
-        None
-    });
-    //rtpbin.connect( "on-new-sender-ssrc", false, |values| { 
-    //  println!("NEW SENDER SRC!!");
-    //});
-    //rtpbin.connect( "on-ssrc-sdes", false, |values| { 
-    //  println!("NEW SESSION DATA!!!");
-    //});
+    rtpbin.connect( "on-ssrc-sdes", false, |values| { 
+      println!("NEW SESSION DATA!!! {:?}", values);
+      None
+    })?;
 
 
 
@@ -253,6 +192,7 @@ fn run_pipeline() -> Result<(), Error> {
                                         &oggmux,
                                         &filesink
                                         ]);
+        //                                .expect("Can not link new elements to pipeline!");
 
 
         //Connect new rtpbin srcpad to the linked elements
@@ -270,20 +210,29 @@ fn run_pipeline() -> Result<(), Error> {
         }
 
         //This is important for elements not getting confused about time
-        rtpopusdepay.sync_state_with_parent();
-        opusparsein.sync_state_with_parent();
-        opusdec.sync_state_with_parent();
-        audiomixer.sync_state_with_parent();
-        opusenc.sync_state_with_parent();
-        opusparseout.sync_state_with_parent();
-        oggmux.sync_state_with_parent();
-        filesink.sync_state_with_parent();
+        rtpopusdepay.sync_state_with_parent()
+                    .expect("Can not sync element state with parent!");
+        opusparsein.sync_state_with_parent()
+                   .expect("Can not sync element state with parent!");
+        opusdec.sync_state_with_parent()
+               .expect("Can not sync element state with parent!");
+        audiomixer.sync_state_with_parent()
+                  .expect("Can not sync element state with parent!");
+        opusenc.sync_state_with_parent()
+               .expect("Can not sync element state with parent!");
+        opusparseout.sync_state_with_parent()
+                    .expect("Can not sync element state with parent!");
+        oggmux.sync_state_with_parent()
+              .expect("Can not sync element state with parent!");
+        filesink.sync_state_with_parent()
+                .expect("Can not sync element state with parent!");
     });
 
 
 
     //Play Gstreamer pipeline
-    pipeline.set_state(gstreamer::State::Playing);
+    pipeline.set_state(gstreamer::State::Playing)
+            .expect("Pipeline can not begin playing!");
 
     //Expect pipeline has bus
     let bus = pipeline
@@ -324,13 +273,13 @@ fn run_pipeline() -> Result<(), Error> {
                 }
             }
             MessageView::Warning(s) => {
-              println!("Warning: {:?}", msg.src() )
+              println!("Warning: {:?} {:?}", s, msg.src() )
             }
             MessageView::Info(s) => {
-              println!("Warning: {:?}", msg.src() )
+              println!("Warning: {:?} {:?}", s, msg.src() )
             }
             MessageView::Tag(s) => {
-              println!("Tag: {:?}", msg.src() )
+              println!("Tag: {:?} {:?}", s, msg.src() )
             }
             MessageView::StreamStatus(s) => {
               println!("Stream Status: {:?} and then {:?}", msg, s )
