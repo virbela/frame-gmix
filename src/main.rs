@@ -76,20 +76,24 @@ fn run_pipeline() -> Result<(), Error> {
 
     //Create rtpbin that can accept multiple rtp sessions
     let rtpbin = gstreamer::ElementFactory::make("rtpbin", Some("RTPBin"))
-                                            .map_err(|_| MissingElement("UDPSrc"))?;
+                                            .map_err(|_| MissingElement("RTPBin"))?;
 
     //Create audio mixer and output to file
     //TODO output to mediasoup
     let audiomixer = gstreamer::ElementFactory::make("audiomixer", Some("Audio Mixer"))
-                                                .map_err(|_| MissingElement("UDPSrc"))?;
+                                                .map_err(|_| MissingElement("AudioMixet"))?;
     let opusenc = gstreamer::ElementFactory::make("opusenc", Some("Opus Encoder"))
-                                             .map_err(|_| MissingElement("UDPSrc"))?;
+                                             .map_err(|_| MissingElement("OpusEnc"))?;
     let opusparseout = gstreamer::ElementFactory::make("opusparse", Some("Opus Output Parser"))
-                                                  .map_err(|_| MissingElement("UDPSrc"))?;
-    let oggmux = gstreamer::ElementFactory::make("oggmux", Some("OGG Constructor"))
-                                            .map_err(|_| MissingElement("UDPSrc"))?;
-    let filesink = gstreamer::ElementFactory::make("filesink", Some("Write File as Ouput"))
-                                              .map_err(|_| MissingElement("UDPSrc"))?;
+                                                  .map_err(|_| MissingElement("OpusParseOut"))?;
+    let rtpopuspay = gstreamer::ElementFactory::make("rtpopuspay", Some("Opus RTP Payload Loader"))
+                                                  .map_err(|_| MissingElement("RTPOpusPay"))?;
+    let udpsink = gstreamer::ElementFactory::make("udpsink", Some("UDP Sink to Mediasoup Server"))
+                                                  .map_err(|_| MissingElement("UDPSink"))?;
+    //let oggmux = gstreamer::ElementFactory::make("oggmux", Some("OGG Constructor"))
+    //                                        .map_err(|_| MissingElement("UDPSrc"))?;
+    //let filesink = gstreamer::ElementFactory::make("filesink", Some("Write File as Ouput"))
+    //                                          .map_err(|_| MissingElement("UDPSrc"))?;
 
 
     // Configure elements
@@ -101,8 +105,14 @@ fn run_pipeline() -> Result<(), Error> {
     src.set_property("port", 1925)?; //TODO: Get this from signaling
     src.set_property("caps", &audio_caps)?;
     
+    opusenc.set_property("bitrate", 48000)?;
+    
+    //udpsink.set_property("host", "34.238.171.194")?; //TODO: Get this from signaling
+    udpsink.set_property("host", "127.0.0.1")?; //TODO: Get this from signaling
+    udpsink.set_property("port", 1928)?; //TODO: Get this from signaling
+    
     //TODO: Hook this into mediasoup
-    filesink.set_property("location", "rust.ogg")?;
+    //filesink.set_property("location", "rust.ogg")?;
        
 
     // Add elements to the pipeline
@@ -111,8 +121,10 @@ fn run_pipeline() -> Result<(), Error> {
                         &audiomixer,
                         &opusenc,
                         &opusparseout,
-                        &oggmux,
-                        &filesink
+                        &rtpopuspay,
+                        &udpsink
+                        //&oggmux,
+                        //&filesink
                         ])?;
 
     // Link the elements to other elements
@@ -189,8 +201,10 @@ fn run_pipeline() -> Result<(), Error> {
                                         &audiomixer,
                                         &opusenc,
                                         &opusparseout,
-                                        &oggmux,
-                                        &filesink
+                                        &rtpopuspay,
+                                        &udpsink
+                                        //&oggmux,
+                                        //&filesink
                                         ]);
         //                                .expect("Can not link new elements to pipeline!");
 
@@ -222,10 +236,14 @@ fn run_pipeline() -> Result<(), Error> {
                .expect("Can not sync element state with parent!");
         opusparseout.sync_state_with_parent()
                     .expect("Can not sync element state with parent!");
-        oggmux.sync_state_with_parent()
-              .expect("Can not sync element state with parent!");
-        filesink.sync_state_with_parent()
-                .expect("Can not sync element state with parent!");
+        rtpopuspay.sync_state_with_parent()
+                  .expect("Can not sync element state with parent!");
+        udpsink.sync_state_with_parent()
+               .expect("Can not sync element state with parent!");
+        //oggmux.sync_state_with_parent()
+        //      .expect("Can not sync element state with parent!");
+        //filesink.sync_state_with_parent()
+        //        .expect("Can not sync element state with parent!");
     });
 
 
