@@ -1,4 +1,7 @@
-use crate::message::{RequestMessage, ResponseMessage};
+use crate::{
+    config::Config,
+    message::{MessageRequest, MessageResponse, RequestMessage, ResponseMessage},
+};
 
 use super::codec;
 use futures::{future::poll_fn, ready, sink::Sink, stream::StreamExt};
@@ -20,38 +23,69 @@ use uuid::Uuid;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-pub async fn handle_stream(mut stream: TcpStream) -> Result<(), Error> {
+pub async fn handle_stream(mut stream: TcpStream, config: Config) -> Result<(), Error> {
     stream.set_nodelay(true)?;
-
     let (read, write) = stream.split();
     let mut read = FramedRead::new(read, codec::Server::default());
     let mut write = FramedWrite::new(write, codec::Server::default());
 
     let mut queue_write = QueuedWrite::new(&mut write);
-    let server_id = Uuid::parse_str("fe3219b4-ad05-11ed-afa1-0242ac120002").unwrap();
+    let server_id = config.clone().node;
     let timer = sleep(Duration::from_secs(10));
     pin!(timer);
-
+    let register_response = ResponseMessage::OutgoingServer {
+        node: Some(config.clone().node),
+        message: MessageResponse::registerMixingServer {
+            mode: config.clone().mode,
+            region: "local".to_owned(),
+        },
+    };
+    queue_write.push(register_response);
     loop {
         select! {
             opt = read.next() => {
                 match opt {
                     Some(res) => {
                         let msg: RequestMessage = res?;
-
                         // handle request message.
+                        match msg {
+                        RequestMessage::IncomingServer { node, wsid, message } => {
+                            println!("incoming message: {:?}", &message);
+                            match message {
+                            MessageRequest::createFrameAudioMixer { hello } => {
+                                println!("createFrameAudioMixer {}", &hello);
+                                let response = ResponseMessage::OutgoingServer {
+                                    node: Some(server_id),
+                                    message: MessageResponse::createdFrameAudioMixer {},
+                                };
+                                queue_write.push(response);
+                            },
+                            MessageRequest::destroyFrameAudioMixer {  } => {
+                                println!("destroyedFrameAudioMixer");
+                                let response = ResponseMessage::OutgoingServer {
+                                    node: Some(server_id),
+                                    message: MessageResponse::destroyFrameAudioMixer {},
+                                };
+                                queue_write.push(response);
+                            },
+                                }
+                            },
+                        }
                     },
                     None => return Ok(())
                 }
-            }
+            },
             res = queue_write.try_write() => res?,
             _ = timer.as_mut() => {
                 // check for keep alive state.
-
                 // send heart beat message.
                 let response = ResponseMessage::OutgoingServer {
                     node: Some(server_id),
-                    message: crate::message::MessageResponse::Ping,
+                    message: MessageResponse::serverLoad {
+                        mode: config.clone().mode,
+                        region: config.clone().mode,
+                        load:  0.0
+                    },
                 };
                 queue_write.push(response);
 

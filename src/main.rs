@@ -1,4 +1,5 @@
 use clap::Parser;
+use config::Config;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     str::FromStr,
@@ -10,6 +11,7 @@ use tracing::{error, info};
 use crate::handler::handle_stream;
 
 mod codec;
+mod config;
 mod handler;
 mod message;
 #[derive(Parser, Debug)]
@@ -25,7 +27,7 @@ async fn main() {
         .with_env_filter("frame_mediasoup=info,frame_mediasoup_proto=trace")
         .init();
     let args: Args = Args::parse();
-
+    let config = Config::init();
     let addr = args
         .url
         .to_socket_addrs()
@@ -46,7 +48,7 @@ async fn main() {
             info!("Connecting to: {}", &addr);
 
             match TcpStream::connect(addr).await {
-                Ok(stream) => match handle_stream(stream).await {
+                Ok(stream) => match handle_stream(stream, config.clone()).await {
                     Ok(_) => {
                         info!("Shutting down application");
                         return;

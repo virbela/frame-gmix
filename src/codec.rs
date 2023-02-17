@@ -60,22 +60,25 @@ impl Decoder for Server {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        println!("incoming buff: {:?}", &src);
+        println!("self size: {:?}", &self.size);
         loop {
             match self.size {
                 Some(size) => {
                     return if size <= src.len() {
                         let msg = serde_json::from_slice(&src[..size])?;
-
                         src.advance(size);
                         self.size = None;
-
+                        println!("incoming buff: {:?}", &src);
                         Ok(Some(msg))
                     } else {
+                        println!("none");
                         Ok(None)
                     }
                 }
                 None => {
                     if src.len() < 4 {
+                        println!("None");
                         return Ok(None);
                     }
 

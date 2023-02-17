@@ -3,14 +3,22 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/*
+// outgoing
+registerMixingServer (mixer -> api) (edited)
+createdFrameAudioMixer (mixer -> api)
+destroyedFrameAudioMixer (mixer->api)
+// incoming
+createFrameAudioMixer (api -> mixer) (edited)
+destroyFrameAudioMixer (api -> mixer)
+heartbeat (mixer -> api)
+createFrameAudioMixer will open a port for incoming RTP from mediasoup, mediasoup would then send rtp packets when received createdFrameAudioMixer
+ */
+
 // server message sent to client
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum RequestMessage {
-    Incoming {
-        wsid: String,
-        message: MessageRequest,
-    },
     IncomingServer {
         node: Option<Uuid>,
         wsid: Option<String>,
@@ -22,25 +30,17 @@ pub enum RequestMessage {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum MessageRequest {
-    Ping,
     #[serde(rename_all = "camelCase")]
-    createRouterGroup {},
+    createFrameAudioMixer { hello: String },
+    #[serde(rename_all = "camelCase")]
+    destroyFrameAudioMixer {},
 }
 
 // client message sent to server
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum ResponseMessage {
-    Outgoing {
-        ws: Option<String>,
-        message: MessageResponse,
-    },
-    OutgoingCommunication {
-        ws: Option<String>,
-        communication: MessageResponse,
-    },
     OutgoingServer {
-        // wsid: Option<String>,
         node: Option<Uuid>,
         message: MessageResponse,
     },
@@ -49,10 +49,16 @@ pub enum ResponseMessage {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum MessageResponse {
-    Ping,
     #[serde(rename_all = "camelCase")]
-    registerMediaServer {
+    registerMixingServer { mode: String, region: String },
+    #[serde(rename_all = "camelCase")]
+    serverLoad {
         mode: String,
         region: String,
+        load: f32,
     },
+    #[serde(rename_all = "camelCase")]
+    createdFrameAudioMixer {},
+    #[serde(rename_all = "camelCase")]
+    destroyFrameAudioMixer {},
 }
