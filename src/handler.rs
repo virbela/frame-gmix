@@ -19,6 +19,7 @@ use tokio::{
     time::{sleep, Instant},
 };
 use tokio_util::codec::{FramedRead, FramedWrite};
+use tracing::trace;
 use uuid::Uuid;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -47,6 +48,7 @@ pub async fn handle_stream(mut stream: TcpStream, config: Config) -> Result<(), 
                 match opt {
                     Some(res) => {
                         let msg: RequestMessage = res?;
+                        trace!("{msg:?}");
                         // handle request message.
                         match msg {
                         RequestMessage::IncomingServer { node, wsid, message } => {

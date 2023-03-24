@@ -60,30 +60,23 @@ impl Decoder for Server {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        println!("incoming buff: {:?}", &src);
-        println!("self size: {:?}", &self.size);
         loop {
             match self.size {
                 Some(size) => {
-                    return if size <= src.len() {
+                    if src.len() >= size {
                         let msg = serde_json::from_slice(&src[..size])?;
                         src.advance(size);
                         self.size = None;
-                        println!("incoming buff: {:?}", &src);
-                        Ok(Some(msg))
+                        return Ok(Some(msg));
                     } else {
-                        println!("none");
-                        Ok(None)
+                        return Ok(None);
                     }
                 }
                 None => {
                     if src.len() < 4 {
-                        println!("None");
                         return Ok(None);
                     }
-
-                    self.size = Some(BigEndian::read_u32(&src[..4]) as usize);
-
+                    self.size = Some(BigEndian::read_u32(&src[..4]) as usize - 4);
                     src.advance(4);
                 }
             }
