@@ -9,8 +9,8 @@ edition = "2018"
 anyhow = "1.0.51"
 derive_more = "0.99.17"
 futures = { version = "0.3.21", default-features = false }
-glib = "0.14.8"
-gstreamer = "0.17.4"
+glib = "0.17.5"
+gstreamer = "0.20.3"
 serde = { version = "1.0.130", features = ["derive"] }
 tokio = { version = "1.18.1", features = ["full"] }
 tokio-util = {version="0.7.7", features=["codec"]}

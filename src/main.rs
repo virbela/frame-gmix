@@ -14,6 +14,7 @@ mod codec;
 mod config;
 mod handler;
 mod message;
+mod mixer;
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -32,8 +33,7 @@ async fn main() {
         .url
         .to_socket_addrs()
         .unwrap()
-        .filter(|addr| addr.is_ipv4())
-        .next()
+        .find(|addr| addr.is_ipv4())
         .unwrap_or_else(|| {
             let default = "0.0.0.0:1188";
             info!(

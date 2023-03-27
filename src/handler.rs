@@ -1,9 +1,9 @@
+use super::codec;
 use crate::{
     config::Config,
     message::{MessageRequest, MessageResponse, RequestMessage, ResponseMessage},
+    mixer::session_manager::MixerSessionManager,
 };
-
-use super::codec;
 use futures::{future::poll_fn, ready, sink::Sink, stream::StreamExt};
 use std::{
     collections::VecDeque,
@@ -11,8 +11,10 @@ use std::{
     pin::Pin,
     str::FromStr,
     task::Poll,
+    thread,
     time::Duration,
 };
+use tokio::spawn;
 use tokio::{
     net::TcpStream,
     pin, select,
@@ -55,6 +57,23 @@ pub async fn handle_stream(mut stream: TcpStream, config: Config) -> Result<(), 
                             println!("incoming message: {:?}", &message);
                             match message {
                             MessageRequest::createFrameAudioMixer { hello } => {
+                                let port_range_start = (5000, 5100).0;
+                                let port_range_end = (500, 5100).1;
+                                let destination_port = 6000;
+                                gstreamer::init()?;
+                                let port_range = (port_range_start, port_range_end);
+                                let mixer_manager = MixerSessionManager::new(port_range.clone());
+                                let destination_ip1 = "127.0.0.1";
+                                let session_id1 = "session1".to_string();
+                                mixer_manager.create_session(session_id1.clone(), 2, destination_ip1, destination_port).unwrap();
+                                let mixer_manager_clone = mixer_manager;
+                                let session1_handle = thread::spawn(move || {
+                                    let rt = tokio::runtime::Runtime::new().unwrap();
+                                    rt.block_on(async move {
+                                        mixer_manager_clone.start_session(&session_id1.clone()).await.unwrap();
+                                    })
+                                });
+                                session1_handle.join().unwrap();
                                 println!("createFrameAudioMixer {}", &hello);
                                 let response = ResponseMessage::OutgoingServer {
                                     node: Some(server_id),

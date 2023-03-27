@@ -96,7 +96,6 @@ impl Encoder<ResponseMessage> for Server {
 
         let len = (dst.len() - base) as u32;
 
-        // TODO: no BigEndian?
         (&mut dst[base..]).put_u32(len);
 
         Ok(())
