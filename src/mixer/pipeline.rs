@@ -1,10 +1,10 @@
-use gstreamer::{element_error, prelude::*};
-
 use glib::translate::FromGlib;
 use gstreamer::traits::ElementExt;
+use gstreamer::{element_error, prelude::*};
 use gstreamer::{ElementFactory, Pipeline};
 use std::error::Error;
 use std::sync::{Arc, Mutex};
+
 pub struct AudioMixerPipeline {
     pipeline: Arc<Mutex<Option<Pipeline>>>,
     input_ports: Vec<u16>,
@@ -42,18 +42,7 @@ impl AudioMixerPipeline {
             let conv = ElementFactory::make("audioconvert")
                 .build()
                 .expect("failed to create audioconvert");
-            let queue = ElementFactory::make("queue")
-                .build()
-                .expect("failed to create queue element");
-            let elements = (
-                udpsrc,
-                rtpbin.clone(),
-                depay.clone(),
-                queue.clone(),
-                parse,
-                dec,
-                conv,
-            );
+            let elements = (udpsrc, rtpbin.clone(), depay.clone(), parse, dec, conv);
             input_elements.push(elements);
         }
 
@@ -65,59 +54,63 @@ impl AudioMixerPipeline {
             .expect("failed to create opusenc");
         let rtpopuspay = ElementFactory::make("rtpopuspay")
             .build()
-            .expect("failed to create rtpopusdepay");
-        let udpsink = ElementFactory::make("udpsink").build().expect(
-            "failed to create udpsink
-        ",
-        );
+            .expect("failed to create rtpopuspay");
+        let udpsink = ElementFactory::make("udpsink")
+            .build()
+            .expect("failed to create udpsink");
 
         udpsink.set_property_from_str("host", destination_ip);
         udpsink.set_property_from_str("port", &destination_port.to_string());
 
         let pipeline = Pipeline::new(None);
-        println!("after pipeline");
-        pipeline.add_many(&[&audiomixer, &opusenc, &rtpopuspay, &udpsink])?;
-        println!("after pipeline add many");
-        for (i, (udpsrc, rtpbin, depay, queue, parse, dec, conv)) in
-            input_elements.into_iter().enumerate()
+
+        for (i, (udpsrc, rtpbin, depay, parse, dec, conv)) in input_elements.into_iter().enumerate()
         {
             pipeline.add_many(&[&udpsrc, &rtpbin, &depay, &parse, &dec, &conv])?;
-            println!("after pipeline add many 2");
-            let link_result = gstreamer::Element::link_many(&[
-                &udpsrc,
-                &rtpbin,
-                &depay,
-                &queue,
-                &parse,
-                &dec,
-                &conv,
-                &audiomixer,
-            ]);
-            println!("after let link many result");
-            if let Err(err) = link_result {
-                let message = format!("Failed to link elements: {}", err);
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    message,
-                )));
-            }
-            println!("after let error");
-            let sinkpad_template = audiomixer
-                .pad_template("sink_%u")
-                .expect("Failed to get audiomixer sink pad template");
-            println!("before panic ");
-            let sinkpad = audiomixer
-                .request_pad(&sinkpad_template, None, None)
-                .unwrap();
-            println!("after panic");
-            let srcpad = conv.static_pad("src").unwrap();
-            let link_result = srcpad.link(&sinkpad);
-            if let Err(e) = link_result {
-                eprintln!("Failed to link pads: {}", e);
-                return Err(Box::new(e));
-            }
+
+            let depay_clone = depay.clone();
+            let audiomixer_clone = audiomixer.clone();
+            let conv_clone = conv.clone();
+
+            let _ = rtpbin.connect("pad-added", false, move |args| {
+                let new_pad = match args[1].get::<gstreamer::Pad>() {
+                    Ok(pad) => pad,
+                    Err(_) => {
+                        eprintln!("Failed to get Pad from args");
+                        return None;
+                    }
+                };
+
+                let new_pad_name = new_pad.name();
+                if new_pad_name.starts_with("recv_rtp_src_0") {
+                    let depay_sink_pad = depay_clone
+                        .static_pad("sink")
+                        .expect("Failed to get sink pad from rtpopusdepay");
+                    new_pad
+                        .link(&depay_sink_pad)
+                        .expect("Failed to link rtpbin and rtpopusdepay");
+
+                    let sinkpad_template = audiomixer_clone
+                        .pad_template("sink_%u")
+                        .expect("Failed to get audiomixer sink pad template");
+                    let sinkpad = audiomixer_clone
+                        .request_pad(&sinkpad_template, None, None)
+                        .unwrap();
+                    let srcpad = conv_clone.static_pad("src").unwrap();
+                    srcpad
+                        .link(&sinkpad)
+                        .expect("Failed to link conv and audiomixer");
+                }
+                None
+            });
+
+            udpsrc
+                .link(&rtpbin)
+                .expect("Failed to link udpsrc and rtpbin");
+            gstreamer::Element::link_many(&[&depay, &parse, &dec, &conv])?;
         }
 
+        pipeline.add_many(&[&audiomixer, &opusenc, &rtpopuspay, &udpsink])?;
         gstreamer::Element::link_many(&[&audiomixer, &opusenc, &rtpopuspay, &udpsink])?;
 
         Ok(AudioMixerPipeline {
