@@ -65,21 +65,23 @@ pub async fn handle_stream(mut stream: TcpStream, config: Config) -> Result<(), 
                                 let mixer_manager = MixerSessionManager::new(port_range.clone());
                                 let destination_ip1 = "127.0.0.1";
                                 let session_id1 = "session1".to_string();
-                                mixer_manager.create_session(session_id1.clone(), 2, destination_ip1, destination_port).unwrap();
+                                let ports = mixer_manager.create_session(session_id1.clone(), 2, destination_ip1, destination_port).unwrap();
                                 let mixer_manager_clone = mixer_manager;
-                                let session1_handle = thread::spawn(move || {
+                                println!("before spawn");
+                                println!("createFrameAudioMixer {}", &hello);
+                                let _ = thread::spawn(move || {
                                     let rt = tokio::runtime::Runtime::new().unwrap();
                                     rt.block_on(async move {
                                         mixer_manager_clone.start_session(&session_id1.clone()).await.unwrap();
                                     })
                                 });
-                                session1_handle.join().unwrap();
-                                println!("createFrameAudioMixer {}", &hello);
                                 let response = ResponseMessage::OutgoingServer {
                                     node: Some(server_id),
-                                    message: MessageResponse::createdFrameAudioMixer {},
+                                    message: MessageResponse::createdFrameAudioMixer { port_range: ports, destination_port },
                                 };
+                                println!("before sending out message: ");
                                 queue_write.push(response);
+                                // let _ = session1_handle.join();
                             },
                             MessageRequest::destroyFrameAudioMixer {  } => {
                                 println!("destroyedFrameAudioMixer");

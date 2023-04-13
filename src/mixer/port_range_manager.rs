@@ -1,3 +1,5 @@
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use std::collections::HashSet;
 use std::error::Error;
 
@@ -22,6 +24,8 @@ impl PortRangeManager {
             )));
         }
 
+        let mut rng = thread_rng();
+        self.available_ports.shuffle(&mut rng);
         let allocated_ports: Vec<u16> = self.available_ports.drain(..count).collect();
         for port in &allocated_ports {
             self.used_ports.insert(*port);

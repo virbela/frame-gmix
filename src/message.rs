@@ -58,7 +58,10 @@ pub enum MessageResponse {
         load: f32,
     },
     #[serde(rename_all = "camelCase")]
-    createdFrameAudioMixer {},
+    createdFrameAudioMixer {
+        port_range: Vec<u16>,
+        destination_port: u16,
+    },
     #[serde(rename_all = "camelCase")]
     destroyFrameAudioMixer {},
 }

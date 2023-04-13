@@ -25,14 +25,14 @@ impl MixerSessionManager {
         num_input_ports: usize,
         destination_ip: &str,
         destination_port: u16,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<Vec<u16>, Box<dyn Error>> {
         let input_ports = {
             let mut port_manager = self.port_range_manager.lock().unwrap();
             port_manager.allocate_ports(num_input_ports)?
         };
         println!("after inputports");
         println!(
-            "inpurt_ports: {:?}, destination_ip: {:?}, deallocate_ports: {:?}",
+            "inpurt_ports: {:?}, destination_ip: {:?}, destination_port: {:?}",
             input_ports.clone(),
             destination_ip.clone(),
             destination_port.clone()
@@ -45,13 +45,16 @@ impl MixerSessionManager {
             .unwrap()
             .insert(session_id.clone(), audio_mixer_pipeline);
         println!("before ok");
-        Ok(())
+        Ok(input_ports)
     }
 
     pub async fn start_session(&self, session_id: &str) -> Result<(), Box<dyn Error>> {
+        println!("start session");
         let sessions = self.sessions.lock().unwrap();
         if let Some(audio_mixer_pipeline) = sessions.get(session_id) {
+            println!("some audio");
             audio_mixer_pipeline.run().await?;
+            println!("start_session");
             Ok(())
         } else {
             Err(Box::new(std::io::Error::new(
