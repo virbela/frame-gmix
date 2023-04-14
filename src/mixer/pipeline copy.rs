@@ -3,7 +3,6 @@ use gstreamer::traits::ElementExt;
 use gstreamer::{element_error, prelude::*};
 use gstreamer::{ElementFactory, Pipeline};
 use std::error::Error;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 pub struct AudioMixerPipeline {
@@ -26,15 +25,6 @@ impl AudioMixerPipeline {
                 .build()
                 .expect("failed to create udpsrc");
             udpsrc.set_property_from_str("port", &port.to_string());
-            let audio_caps = gstreamer::Caps::builder("application/x-rtp")
-                .field("media", "audio")
-                .field("clock-rate", 48000)
-                .field("encoding-name", "OPUS")
-                .build();
-            // let caps_str = format!("application/x-rtp, media=(string)audio, clock-rate=(int)48000, encoding-name=(string)OPUS");
-            // let caps =
-            //     gstreamer::Caps::from_str(&caps_str).expect("Failed to create caps from string");
-            udpsrc.set_property("caps", &audio_caps);
 
             let rtpbin = ElementFactory::make("rtpbin")
                 .build()
@@ -43,7 +33,6 @@ impl AudioMixerPipeline {
             let depay = ElementFactory::make("rtpopusdepay")
                 .build()
                 .expect("failed to create rtpopusdepay");
-            // depay.set_property("allow-overwrite", &true);
             let parse = ElementFactory::make("opusparse")
                 .build()
                 .expect("failed to create opusparse");
@@ -63,7 +52,6 @@ impl AudioMixerPipeline {
         let opusenc = ElementFactory::make("opusenc")
             .build()
             .expect("failed to create opusenc");
-        // opusenc.set_property("bitrate", 48000);
         let rtpopuspay = ElementFactory::make("rtpopuspay")
             .build()
             .expect("failed to create rtpopuspay");
@@ -73,6 +61,7 @@ impl AudioMixerPipeline {
 
         udpsink.set_property_from_str("host", destination_ip);
         udpsink.set_property_from_str("port", &destination_port.to_string());
+
         let pipeline = Pipeline::new(None);
 
         for (i, (udpsrc, rtpbin, depay, parse, dec, conv)) in input_elements.into_iter().enumerate()
@@ -137,12 +126,8 @@ impl AudioMixerPipeline {
         pipeline.set_state(gstreamer::State::Playing)?;
 
         let bus = pipeline.bus().unwrap();
-        // let msg = bus.timed_pop_filtered(gstreamer::ClockTime::NONE, &[]);
-        loop {
-            let msg = match bus.pop() {
-                Some(msg) => msg,
-                None => continue,
-            };
+        let msg = bus.timed_pop_filtered(gstreamer::ClockTime::NONE, &[]);
+        if let Some(msg) = msg {
             match msg.view() {
                 gstreamer::MessageView::Error(err) => {
                     let _ = pipeline.set_state(gstreamer::State::Null);
@@ -157,19 +142,32 @@ impl AudioMixerPipeline {
                     );
 
                     element_error!(pipeline, gstreamer::LibraryError::Failed, (&error_msg));
-                    return Err(Box::new(std::io::Error::new(
+                    Err(Box::new(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         error_msg,
-                    )));
+                    )))
                 }
                 gstreamer::MessageView::Eos(_) => {
                     let _ = pipeline.set_state(gstreamer::State::Null);
-                    return Ok(());
+                    Ok(())
                 }
-                _ => continue,
+                _ => {
+                    let _ = pipeline.set_state(gstreamer::State::Null);
+                    Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Unknown message received",
+                    )))
+                }
             }
+        } else {
+            let _ = pipeline.set_state(gstreamer::State::Null);
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "No message received",
+            )))
         }
     }
+
     pub fn get_input_ports(&self) -> Vec<u16> {
         self.input_ports.clone()
     }
