@@ -108,8 +108,8 @@ fn run_pipeline() -> Result<(), Error> {
 
     opusenc.set_property("bitrate", 48000)?;
 
-    udpsink.set_property("host", "34.238.171.194")?; //TODO: Get this from signaling
-                                                     //udpsink.set_property("host", "127.0.0.1")?; //TODO: Get this from signaling
+    udpsink.set_property("host", "127.0.0.1")?; //TODO: Get this from signaling
+                                                //udpsink.set_property("host", "127.0.0.1")?; //TODO: Get this from signaling
     udpsink.set_property("port", 1928)?; //TODO: Get this from signaling
 
     //TODO: Hook this into mediasoup
