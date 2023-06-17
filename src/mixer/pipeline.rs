@@ -1,10 +1,38 @@
+use anyhow::Error;
+use derive_more::{Display, Error};
 use glib::translate::FromGlib;
 use gstreamer::traits::ElementExt;
-use gstreamer::{element_error, prelude::*};
+use gstreamer::{element_error, prelude::*, Element, MessageView};
 use gstreamer::{ElementFactory, Pipeline};
-use std::error::Error;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+
+//Helper functions
+#[derive(Debug, Display, Error)]
+#[display(fmt = "Missing element {}", _0)]
+struct MissingElement(#[error(not(source))] &'static str);
+
+#[derive(Debug, Display, Error)]
+#[display(fmt = "Received error from {}: {} (debug: {:?})", src, error, debug)]
+struct ErrorMessage {
+    src: String,
+    error: String,
+    debug: Option<String>,
+    source: glib::Error,
+}
+
+#[cfg(feature = "v1_10")]
+#[derive(Clone, Debug, glib::Boxed)]
+#[boxed_type(name = "ErrorValue")]
+struct ErrorValue(Arc<Mutex<Option<Error>>>);
+
+#[derive(Debug, Display, Error)]
+#[display(fmt = "Unknown payload type {}", _0)]
+struct UnknownPT(#[error(not(source))] u32);
+
+#[derive(Debug, Display, Error)]
+#[display(fmt = "No such pad {} in {}", _0, _1)]
+struct NoSuchPad(#[error(not(source))] &'static str, String);
 
 pub struct AudioMixerPipeline {
     pipeline: Arc<Mutex<Option<Pipeline>>>,
@@ -16,161 +44,289 @@ impl AudioMixerPipeline {
         input_ports: Vec<u16>,
         destination_ip: &str,
         destination_port: u16,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         gstreamer::init()?;
+        let pipeline = Pipeline::new(Some("FrameMixerPipeline"));
+        let src = ElementFactory::make("udpsrc")
+            .build()
+            .expect("failed to create udpsrc");
+        let rtpbin = ElementFactory::make("rtpbin")
+            .build()
+            .expect("failed to create rtpbin");
 
-        let mut input_elements = Vec::new();
-
-        for port in &input_ports {
-            let udpsrc = ElementFactory::make("udpsrc")
-                .build()
-                .expect("failed to create udpsrc");
-            udpsrc.set_property_from_str("port", &port.to_string());
-            let audio_caps = gstreamer::Caps::builder("application/x-rtp")
-                .field("media", "audio")
-                .field("clock-rate", 48000)
-                .field("encoding-name", "OPUS")
-                .build();
-            // let caps_str = format!("application/x-rtp, media=(string)audio, clock-rate=(int)48000, encoding-name=(string)OPUS");
-            // let caps =
-            //     gstreamer::Caps::from_str(&caps_str).expect("Failed to create caps from string");
-            udpsrc.set_property("caps", &audio_caps);
-
-            let rtpbin = ElementFactory::make("rtpbin")
-                .build()
-                .expect("failed to create rtpbin");
-
-            let depay = ElementFactory::make("rtpopusdepay")
-                .build()
-                .expect("failed to create rtpopusdepay");
-            // depay.set_property("allow-overwrite", &true);
-            let parse = ElementFactory::make("opusparse")
-                .build()
-                .expect("failed to create opusparse");
-            let dec = ElementFactory::make("opusdec")
-                .build()
-                .expect("failed to create opusdec");
-            let conv = ElementFactory::make("audioconvert")
-                .build()
-                .expect("failed to create audioconvert");
-            let elements = (udpsrc, rtpbin.clone(), depay.clone(), parse, dec, conv);
-            input_elements.push(elements);
-        }
-
+        // create mixer
         let audiomixer = ElementFactory::make("audiomixer")
             .build()
             .expect("failed to create audiomixer");
         let opusenc = ElementFactory::make("opusenc")
             .build()
-            .expect("failed to create opusenc");
-        // opusenc.set_property("bitrate", 48000);
+            .expect("failed to create OpusEnc");
+        let opusparseout = ElementFactory::make("opusparse")
+            .build()
+            .expect("failed to create OpusParseOut");
         let rtpopuspay = ElementFactory::make("rtpopuspay")
             .build()
-            .expect("failed to create rtpopuspay");
+            .expect("failed to create RTPOpusPay");
         let udpsink = ElementFactory::make("udpsink")
             .build()
-            .expect("failed to create udpsink");
+            .expect("failed to create UDPSink");
 
-        udpsink.set_property_from_str("host", destination_ip);
-        udpsink.set_property_from_str("port", &destination_port.to_string());
-        let pipeline = Pipeline::new(None);
+        let audio_caps = gstreamer::Caps::builder("application/x-rtp")
+            .field("media", "audio")
+            .field("clock-rate", 48000)
+            .field("encoding-name", "OPUS")
+            .build();
+        src.set_property("port", 1925); //TODO: Get this from signaling
+        src.set_property("caps", &audio_caps);
 
-        for (i, (udpsrc, rtpbin, depay, parse, dec, conv)) in input_elements.into_iter().enumerate()
-        {
-            pipeline.add_many(&[&udpsrc, &rtpbin, &depay, &parse, &dec, &conv])?;
+        opusenc.set_property("bitrate", 48000);
 
-            let depay_clone = depay.clone();
-            let audiomixer_clone = audiomixer.clone();
-            let conv_clone = conv.clone();
+        udpsink.set_property("host", "127.0.0.1"); //TODO: Get this from signaling
+                                                   //udpsink.set_property("host", "127.0.0.1")?; //TODO: Get this from signaling
+        udpsink.set_property("port", 1928); //TODO: Get this from signaling
 
-            let _ = rtpbin.connect("pad-added", false, move |args| {
-                let new_pad = match args[1].get::<gstreamer::Pad>() {
-                    Ok(pad) => pad,
-                    Err(_) => {
-                        eprintln!("Failed to get Pad from args");
-                        return None;
-                    }
-                };
+        // Add elements to the pipeline
+        pipeline.add_many(&[
+            &src,
+            &rtpbin,
+            &audiomixer,
+            &opusenc,
+            &opusparseout,
+            &rtpopuspay,
+            &udpsink, //&oggmux,
+                      //&filesink
+        ])?;
 
-                let new_pad_name = new_pad.name();
-                if new_pad_name.starts_with("recv_rtp_src_0") {
-                    let depay_sink_pad = depay_clone
-                        .static_pad("sink")
-                        .expect("Failed to get sink pad from rtpopusdepay");
-                    new_pad
-                        .link(&depay_sink_pad)
-                        .expect("Failed to link rtpbin and rtpopusdepay");
+        gstreamer::Element::link_many(&[&src, &rtpbin])?;
 
-                    let sinkpad_template = audiomixer_clone
-                        .pad_template("sink_%u")
-                        .expect("Failed to get audiomixer sink pad template");
-                    let sinkpad = audiomixer_clone
-                        .request_pad(&sinkpad_template, None, None)
-                        .unwrap();
-                    let srcpad = conv_clone.static_pad("src").unwrap();
-                    srcpad
-                        .link(&sinkpad)
-                        .expect("Failed to link conv and audiomixer");
+        // Respond to determining payload type (audio, video)
+        rtpbin.connect("request-pt-map", false, |values| {
+            let pt = values[2]
+                .get::<u32>()
+                .expect("rtpbin \"new-storage\" signal values[2]");
+            println!("RTPBin got payload of type {:?}", pt);
+            match pt {
+                100 => Some(
+                    gstreamer::Caps::builder("application/x-rtp")
+                        .field("media", "audio")
+                        .field("clock-rate", 48000i32)
+                        .field("encoding-name", "OPUS")
+                        .build()
+                        .to_value(),
+                ),
+                96 => Some(
+                    gstreamer::Caps::builder("application/x-rtp")
+                        .field("media", "video")
+                        .field("clock-rate", 90000i32)
+                        .field("encoding-name", "VP8")
+                        .build()
+                        .to_value(),
+                ),
+                _ => None,
+            }
+        });
+
+        rtpbin.connect("on-ssrc-sdes", false, |values| {
+            println!("NEW SESSION DATA!!! {:?}", values);
+            None
+        });
+
+        //Set action to take when pad is added to rtpbin
+        // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
+        let pipeline_weak = pipeline.downgrade(); //Downgrade to use in function
+        rtpbin.connect_pad_added(move |rtpbin, src_pad| {
+            println!("New source pad added to RTPBin");
+            println!("Creating new elements to handle new RTP stream");
+
+            let pipeline_strong = match pipeline_weak.upgrade() {
+                Some(pipeline) => pipeline,
+                None => return,
+            }; //Upgrade to use in function
+
+            //Make elements that will handle this new incoming stream
+            let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay")
+                .build()
+                .expect("Can not make RTP opus depayloader for new RTP media");
+            let opusparsein = gstreamer::ElementFactory::make("opusparse")
+                .build()
+                .expect("Can not make opus parser for new RTP media");
+            let opusdec = gstreamer::ElementFactory::make("opusdec")
+                .build()
+                .expect("Can not make opus decoder for new RTP media");
+
+            //Add elements to the pipeline
+            pipeline_strong
+                .add_many(&[&rtpopusdepay, &opusparsein, &opusdec])
+                .expect("Can not add elements to pipeline!");
+
+            //Link the elements from the depayload to the output
+            let _ = gstreamer::Element::link_many(&[
+                &rtpopusdepay,
+                &opusparsein,
+                &opusdec,
+                &audiomixer,
+                &opusenc,
+                &opusparseout,
+                &rtpopuspay,
+                &udpsink, //&oggmux,
+                          //&filesink
+            ]);
+
+            //Connect new rtpbin srcpad to the linked elements
+            // (this completes the pipe from the new media to the end output)
+            match connect_rtpbin_srcpad(src_pad, &rtpopusdepay) {
+                Ok(_) => (),
+                Err(err) => {
+                    element_error!(
+                        rtpbin,
+                        gstreamer::LibraryError::Failed,
+                        ("Failed to link srcpad"),
+                        ["{}", err]
+                    );
                 }
-                None
-            });
+            }
 
-            udpsrc
-                .link(&rtpbin)
-                .expect("Failed to link udpsrc and rtpbin");
-            gstreamer::Element::link_many(&[&depay, &parse, &dec, &conv])?;
-        }
+            //This is important for elements not getting confused about time
+            rtpopusdepay
+                .sync_state_with_parent()
+                .expect("Can not sync element state with parent!");
+            opusparsein
+                .sync_state_with_parent()
+                .expect("Can not sync element state with parent!");
+            opusdec
+                .sync_state_with_parent()
+                .expect("Can not sync element state with parent!");
+            audiomixer
+                .sync_state_with_parent()
+                .expect("Can not sync element state with parent!");
+        });
 
-        pipeline.add_many(&[&audiomixer, &opusenc, &rtpopuspay, &udpsink])?;
-        gstreamer::Element::link_many(&[&audiomixer, &opusenc, &rtpopuspay, &udpsink])?;
-
-        Ok(AudioMixerPipeline {
+        Ok(Self {
             pipeline: Arc::new(Mutex::new(Some(pipeline))),
             input_ports,
         })
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("run");
         let pipeline = self.pipeline.lock().unwrap().as_ref().unwrap().clone();
 
         pipeline.set_state(gstreamer::State::Playing)?;
+        let bus = pipeline
+            .bus()
+            .expect("Pipeline without bus. Shouldn't happen!");
 
-        let bus = pipeline.bus().unwrap();
-        // let msg = bus.timed_pop_filtered(gstreamer::ClockTime::NONE, &[]);
-        loop {
-            let msg = match bus.pop() {
-                Some(msg) => msg,
-                None => continue,
-            };
+        //Loop and move pipeline forward
+        for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
             match msg.view() {
-                gstreamer::MessageView::Error(err) => {
-                    let _ = pipeline.set_state(gstreamer::State::Null);
-                    let debug = err.debug().unwrap_or_else(|| glib::GString::from("None"));
-                    let error_msg = format!(
-                        "Error from {:?}: {:?} ({:?})",
-                        err.src()
-                            .map(|s| s.path_string())
-                            .unwrap_or_else(|| glib::GString::from("None")),
-                        err.error(),
-                        debug
-                    );
+                MessageView::Eos(..) => break,
+                MessageView::Error(err) => {
+                    pipeline
+                        .set_state(gstreamer::State::Null)
+                        .expect("Unable to set the pipeline to the `Null` state");
 
-                    element_error!(pipeline, gstreamer::LibraryError::Failed, (&error_msg));
-                    return Err(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        error_msg,
-                    )));
+                    return Err(ErrorMessage {
+                        src: msg
+                            .src()
+                            .map(|s| String::from(s.path_string()))
+                            .unwrap_or_else(|| String::from("None")),
+                        error: err.error().to_string(),
+                        debug: err.debug().map(|gstr| gstr.as_str().to_owned()),
+                        source: err.error(),
+                    }
+                    .into());
                 }
-                gstreamer::MessageView::Eos(_) => {
-                    let _ = pipeline.set_state(gstreamer::State::Null);
-                    return Ok(());
+                MessageView::StreamStart(s) => {
+                    println!("Received a StreamStart message: {:?}", s);
+                    // Additional handling of StreamStart messages can go here.
                 }
-                _ => continue,
+                MessageView::Latency(s) => {
+                    println!("Received a Latency message: {:?}", s);
+                    // Additional handling of Latency messages can go here.
+                }
+                MessageView::AsyncDone(s) => {
+                    println!("Received an AsyncDone message: {:?}", s);
+                    // Additional handling of AsyncDone messages can go here.
+                }
+                MessageView::Element(el) => {
+                    println!("Received an Element message: {:?}", el);
+                    // Additional handling of element messages can go here.
+                }
+                MessageView::StateChanged(s) => {
+                    if let Some(element) = msg.src() {
+                        if element.clone() == pipeline && s.current() == gstreamer::State::Playing {
+                            eprintln!("PLAYING");
+                            gstreamer::debug_bin_to_dot_file(
+                                &pipeline,
+                                gstreamer::DebugGraphDetails::all(),
+                                "client-playing",
+                            );
+                        }
+                    }
+                }
+                MessageView::Warning(s) => {
+                    println!("Warning: {:?} {:?}", s, msg.src())
+                }
+                MessageView::Info(s) => {
+                    println!("Warning: {:?} {:?}", s, msg.src())
+                }
+                MessageView::Tag(s) => {
+                    println!("Tag: {:?} {:?}", s, msg.src())
+                }
+                MessageView::StreamStatus(s) => {
+                    println!("Stream Status: {:?} and then {:?}", msg, s)
+                }
+
+                _ => {
+                    println!("Unknown {:?}", msg)
+                }
             }
         }
+
+        //Stop playing pipeline
+        pipeline
+            .set_state(gstreamer::State::Null)
+            .expect("Unable to set the pipeline to the `Null` state");
+
+        Ok(())
     }
+
     pub fn get_input_ports(&self) -> Vec<u16> {
         self.input_ports.clone()
+    }
+}
+
+// Connect source pad to rtpbin
+fn connect_rtpbin_srcpad(src_pad: &gstreamer::Pad, sink: &gstreamer::Element) -> Result<(), Error> {
+    println!("LOL CONNECTING PAD??");
+    let name = src_pad.name();
+    let split_name = name.split('_');
+    let split_name = split_name.collect::<Vec<&str>>();
+    let pt = split_name[5].parse::<u32>()?;
+
+    match pt {
+        100 => {
+            println!("LOL 100 YAY!");
+            let sinkpad = static_pad(sink, "sink");
+            println!("SINK PAD IS: {:?}", sinkpad);
+            println!("SRC PAD IS: {:?}", src_pad);
+            let _ = src_pad.link(&sinkpad.unwrap());
+            Ok(())
+        }
+        _ => Err(Error::from(UnknownPT(pt))),
+    }
+}
+
+#[doc(alias = "get_static_pad")]
+fn static_pad(
+    element: &gstreamer::Element,
+    pad_name: &'static str,
+) -> Result<gstreamer::Pad, Error> {
+    match element.static_pad(pad_name) {
+        Some(pad) => Ok(pad),
+        None => {
+            let element_name = element.name();
+            Err(Error::from(NoSuchPad(pad_name, element_name.to_string())))
+        }
     }
 }
