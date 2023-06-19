@@ -75,6 +75,7 @@ impl AudioMixerPipeline {
             .field("media", "audio")
             .field("clock-rate", 48000)
             .field("encoding-name", "OPUS")
+            .field("payload", 96)
             .build();
         src.set_property("port", 1925); //TODO: Get this from signaling
         src.set_property("caps", &audio_caps);
