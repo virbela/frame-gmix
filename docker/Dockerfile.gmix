@@ -1,0 +1,26 @@
+FROM rust as builder
+
+RUN apt-get update && \
+    apt-get install libgstreamer1.0-dev && \
+    apt-get clean
+
+WORKDIR /container
+
+WORKDIR /container/app
+COPY ./rust/ ./
+
+RUN cargo build --release
+
+#runing image
+FROM debian:stable
+
+RUN apt-get update && \
+    apt-get install gstreamer1.0-plugins-good gstreamer1.0-plugins-bad && \
+    apt-get clean
+
+#copy the binary to the container
+COPY --from=builder /container/app/target/release/gmix /container/app/gmix
+WORKDIR /container/app
+
+RUN chmod +x gmix
+ENTRYPOINT ["/bin/bash", "-c", "./gmix"]

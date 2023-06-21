@@ -1,0 +1,12 @@
+version: '2'
+services: 
+ 
+ mixer:
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.gmix
+  ports:
+    - 1928:1928/udp
+    - 1925:1925/udp
+  volumes:
+    - ./rust:/container/app

@@ -1,0 +1,10 @@
+[package]
+name = "gmix"
+version = "1.0.0"
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.71"
+derive_more = "0.99.17"
+glib = "0.17.10"
+gstreamer = "0.20.6"
