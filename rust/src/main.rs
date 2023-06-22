@@ -10,6 +10,9 @@ struct ErrorMessage {
     error: glib::Error,
     debug: Option<glib::GString>,
 }
+#[derive(Debug, Display, Error)]
+#[display(fmt = "Unknown payload type {}", _0)]
+struct UnknownPT(#[error(not(source))] u32);
 
 // Initialize gstreamer pipeline
 //  and set functions for when receiving a new mediasource
@@ -39,7 +42,6 @@ fn create_pipeline() -> Result<gstreamer::Pipeline, Error> {
     
     opusenc.set_property("bitrate", 48000);
     
-    //dpsink.set_property("host", "34.238.171.194")?; //TODO: Get this from signaling
     udpsink.set_property("host", "127.0.0.1"); //TODO: Get this from signaling
     udpsink.set_property("port", 1928); //TODO: Get this from signaling
     
@@ -51,8 +53,6 @@ fn create_pipeline() -> Result<gstreamer::Pipeline, Error> {
                         &opusparseout,
                         &rtpopuspay,
                         &udpsink
-                        //&oggmux,
-                        //&filesink
                         ])?;
 
     // Link the elements to other elements
@@ -92,71 +92,64 @@ fn create_pipeline() -> Result<gstreamer::Pipeline, Error> {
 
     // Respond to new pad added to rtpbin
     // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
-    //let pipeline_weak = pipeline.downgrade(); //Downgrade to use in function
-    //rtpbin.connect_pad_added( move |rtpbin, src_pad| {
-    //    println!("New source pad added to RTPBin");
-    //    println!("Creating new elements to handle new RTP stream");
-    //
-    //   let pipeline_strong = match pipeline_weak.upgrade() {
-    //                 Some(pipeline) => pipeline,
-    //                 None => return
-    //     }; //Upgrade to use in function
-    //
-    //    //Make elements that will handle this new incoming stream
-    //    let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay").build().expect("sht1");
-    //    let opusparsein = gstreamer::ElementFactory::make("opusparse").build().expect("sht2");
-    //    let opusdec = gstreamer::ElementFactory::make("opusdec").build().expect("sht3");
-    //
-    //    //Add elements to the pipeline
-    //    pipeline_strong.add_many(&[&rtpopusdepay,
-    //                               &opusparsein,
-    //                               &opusdec]);
+    let pipeline_weak = pipeline.downgrade(); //Downgrade to use in function
+    rtpbin.connect_pad_added( move |_rtpbin, src_pad| {
+        println!("New source pad added to RTPBin");
+        println!("Creating new elements to handle new RTP stream");
+    
+       let pipeline_strong = match pipeline_weak.upgrade() {
+                     Some(pipeline) => pipeline,
+                     None => return
+         }; //Upgrade to use in function
+    
+        //Make elements that will handle this new incoming stream
+        let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay").build().expect("sht1");
+        let opusparsein = gstreamer::ElementFactory::make("opusparse").build().expect("sht2");
+        let opusdec = gstreamer::ElementFactory::make("opusdec").build().expect("sht3");
+    
+        //Add elements to the pipeline
+        pipeline_strong.add_many(&[&rtpopusdepay,
+                                   &opusparsein,
+                                   &opusdec]).expect("Can not add to ppelne!");
 
         //Link the elements from the depayload to the output
-        //gstreamer::Element::link_many(&[&rtpopusdepay,
-        //                                &opusparsein,
-        //                                &opusdec,
-        //                                &audiomixer,
-        //                                &opusenc,
-        //                                &opusparseout,
-        //                                &rtpopuspay,
-        //                                &udpsink
-        //                               ]);
-        //                                .expect("Can not link new elements to pipeline!");
+        gstreamer::Element::link_many(&[&rtpopusdepay,
+                                        &opusparsein,
+                                        &opusdec,
+                                        &audiomixer,
+                                        &opusenc,
+                                        &opusparseout,
+                                        &rtpopuspay,
+                                        &udpsink
+                                       ]).expect("Can not link new elements to pipeline!");
 
 
         //Connect new rtpbin srcpad to the linked elements
         // (this completes the pipe from the new media to the end output)
-     //   println!("LOL CONNECTING PAD??");
-     //   let name = src_pad.name();
-     //   let split_name = name.split('_');
-     //   let split_name = split_name.collect::<Vec<&str>>();
-     //   let pt = split_name[5].parse::<u32>().expect("Can't parse src pad name!");
-//
-     //   if pt == 100 {
-     //           println!("LOL 100 YAY!");
-     //           let sinkpad = rtpopusdepay.static_pad("sink");
-     //           println!("SINK PAD IS: {:?}", sinkpad );
-     //           println!("SRC PAD IS: {:?}", src_pad );
-     //           src_pad.sink(&sinkpad);
-     //   } else {
-     //       Err(Error::from(UnknownPT(pt)));
-     //   }
-    //
-    //    Ok(());
-    //});
+        println!("LOL CONNECTING PAD??");
+        let name = src_pad.name();
+        let split_name = name.split('_');
+        let split_name = split_name.collect::<Vec<&str>>();
+        let pt = split_name[5].parse::<u32>().expect("Can't parse src pad name!");
+
+        match pt {
+            96 => {
+                println!("Lnk 96 YAY!");
+                let sinkpad = rtpopusdepay.static_pad("sink").expect("Can't get static pad!");
+                src_pad.link(&sinkpad).expect("Can't link src_pad!");
+            }
+            100 => {
+                println!("Lnk 100 YAY!");
+                let sinkpad = rtpopusdepay.static_pad("sink").expect("Can't get static pad!");
+                src_pad.link(&sinkpad).expect("Can't link src_pad!");
+            }
+            _ => Err::<(), Error>(Error::from(UnknownPT(pt))).unwrap(),
+        };
+    
+    });
 
     Ok(pipeline)
 }
-
-    //rtpbin.connect( "on-ssrc-sdes", false, |values| { 
-    //  println!("NEW SESSION DATA!!! {:?}", values);
-    //  None
-    //})?;
-
-
-
-
 
 //Gstreamer loop
 fn loop_pipeline(pipeline: gstreamer::Pipeline) -> Result<(), Error> {
@@ -170,7 +163,7 @@ fn loop_pipeline(pipeline: gstreamer::Pipeline) -> Result<(), Error> {
         use gstreamer::MessageView;
 
         match msg.view() {
-            MessageView::Eos(..) => break,
+            //MessageView::Eos(..) => break,
             MessageView::Error(err) => {
                 pipeline.set_state(gstreamer::State::Null)?;
                 return Err(ErrorMessage {
@@ -183,10 +176,21 @@ fn loop_pipeline(pipeline: gstreamer::Pipeline) -> Result<(), Error> {
                 }
                 .into());
             }
-            _ => (),
+            MessageView::StateChanged(state) => {
+                println!("{:?}", state);
+            }
+            MessageView::StreamStatus(status) => {
+                println!("Received new status change: {:?}", status);
+            }
+            MessageView::NewClock(clock) => {
+                println!("Received new clock change: {:?}", clock);
+            }
+            _ => {
+                println!("Received message of type: {:?}", msg.type_());
+            }
+
         }
     }
-
     pipeline.set_state(gstreamer::State::Null)?;
 
     Ok(())
