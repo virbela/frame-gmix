@@ -1,73 +1,164 @@
+ //use std::env;
+use gstreamer::MessageView;
+use gstreamer::element_error;
+//use gstreamer::element_warning;
 use gstreamer::prelude::*;
+
 use anyhow::Error;
 use derive_more::{Display, Error};
 
-//Helper functions
 #[derive(Debug, Display, Error)]
-#[display(fmt = "Received error from {src}: {error} (debug: {debug:?})")]
+#[display(fmt = "Missing element {}", _0)]
+struct MissingElement(#[error(not(source))] &'static str);
+
+#[derive(Debug, Display, Error)]
+#[display(fmt = "Received error from {}: {} (debug: {:?})", src, error, debug)]
 struct ErrorMessage {
-    src: glib::GString,
-    error: glib::Error,
-    debug: Option<glib::GString>,
+        src: String,
+        error: String,
+        debug: Option<String>,
+        source: glib::Error,
 }
+
+#[cfg(feature = "v1_10")]
+#[derive(Clone, Debug, glib::Boxed)]
+#[boxed_type(name = "ErrorValue")]
+struct ErrorValue(Arc<Mutex<Option<Error>>>);
+
 #[derive(Debug, Display, Error)]
 #[display(fmt = "Unknown payload type {}", _0)]
 struct UnknownPT(#[error(not(source))] u32);
 
-// Initialize gstreamer pipeline
-//  and set functions for when receiving a new mediasource
-fn create_pipeline() -> Result<gstreamer::Pipeline, Error> {
+#[derive(Debug, Display, Error)]
+#[display(fmt = "No such pad {} in {}", _0, _1)]
+struct NoSuchPad(#[error(not(source))] &'static str, String);
+
+ // Connect source pad to rtpbin
+fn connect_rtpbin_srcpad(src_pad: &gstreamer::Pad, sink: &gstreamer::Element) -> Result<(), Error> {
+    println!("LOL CONNECTING PAD??");
+    let name = src_pad.name();
+    let split_name = name.split('_');
+    let split_name = split_name.collect::<Vec<&str>>();
+    let pt = split_name[5].parse::<u32>()?;
+
+    match pt {
+        100 => {
+            let sinkpad = static_pad(sink, "sink")?;
+            src_pad.link(&sinkpad)?;
+            Ok(())
+        }
+        _ => Err(Error::from(UnknownPT(pt))),
+    }
+}
+
+#[doc(alias = "get_static_pad")]
+fn static_pad(element: &gstreamer::Element, pad_name: &'static str) -> Result<gstreamer::Pad, Error> {
+    match element.static_pad(pad_name) {
+        Some(pad) => Ok(pad),
+        None => {
+            let element_name = element.name();
+            Err(Error::from(NoSuchPad(pad_name, element_name.to_string())))
+        }
+    }
+}
+
+
+fn run_pipeline() -> Result<(), Error> {
+    println!("Hello, world!");
 
     gstreamer::init()?;
 
-    let pipeline = gstreamer::Pipeline::default();
+    let  pipeline = gstreamer::Pipeline::new(Some("TestPipeline"));
 
-    //Construct elements
-    let udpsrc = gstreamer::ElementFactory::make("udpsrc").build()?;
-    let rtpbin = gstreamer::ElementFactory::make("rtpbin").build()?;
-    let audiomixer = gstreamer::ElementFactory::make("audiomixer").build()?;
-    let opusenc = gstreamer::ElementFactory::make("opusenc").build()?;
-    let opusparseout = gstreamer::ElementFactory::make("opusparse").build()?;
-    let rtpopuspay = gstreamer::ElementFactory::make("rtpopuspay").build()?;
-    let udpsink = gstreamer::ElementFactory::make("udpsink").build()?;
+    let src = gstreamer::ElementFactory::make("udpsrc", Some("UDP Src"))
+                                         .map_err(|_| MissingElement("UDPSrc"))?;
 
-    // Configure elements
-    let audio_caps =  gstreamer::Caps::builder("application/x-rtp")
-                                      .field("media", "audio")
-                                      .field("clock-rate", 48000)
-                                      .field("encoding-name", "OPUS")
-                                      .build();
-    udpsrc.set_property("port", 1925); //TODO: Get this from signaling
-    udpsrc.set_property("caps", &audio_caps);
-    
-    opusenc.set_property("bitrate", 48000);
-    
-    udpsink.set_property("host", "127.0.0.1"); //TODO: Get this from signaling
-    udpsink.set_property("port", 1928); //TODO: Get this from signaling
-    
-    // Add elements to the pipeline
-    pipeline.add_many(&[&udpsrc,
-                        &rtpbin,
-                        &audiomixer,
-                        &opusenc,
-                        &opusparseout,
-                        &rtpopuspay,
-                        &udpsink
-                        ])?;
+    let queue = gstreamer::ElementFactory::make("queue", Some("Queue #1"))
+                                           .map_err(|_| MissingElement("UDPSrc"))?;
 
-    // Link the elements to other elements
-    // Each udpsrc should connect to rtpbin
-    gstreamer::Element::link_many(&[&udpsrc,
-                                    &rtpbin
-                                    ])?;
+    let rtpbin = gstreamer::ElementFactory::make("rtpbin", Some("RTPBin"))
+                                            .map_err(|_| MissingElement("UDPSrc"))?;
+
+    //let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay", Some("RTP Opus Depay"))
+    //                                              .map_err(|_| MissingElement("UDPSrc"))?;
+
+    //let opusparsein = gstreamer::ElementFactory::make("opusparse", Some("Opus Input Parser"))
+    //                                             .map_err(|_| MissingElement("UDPSrc"))?;
+
+    //let opusdec = gstreamer::ElementFactory::make("opusdec", Some("Opus Decode"))
+    //                                        .map_err(|_| MissingElement("UDPSrc"))?;
+
+    let audiomixer = gstreamer::ElementFactory::make("audiomixer", Some("Audio Mixer"))
+                                                .map_err(|_| MissingElement("UDPSrc"))?;
+
+    let opusenc = gstreamer::ElementFactory::make("opusenc", Some("Opus Encoder"))
+                                             .map_err(|_| MissingElement("UDPSrc"))?;
+
+    let opusparseout = gstreamer::ElementFactory::make("opusparse", Some("Opus Output Parser"))
+                                                  .map_err(|_| MissingElement("UDPSrc"))?;
+
+    let oggmux = gstreamer::ElementFactory::make("oggmux", Some("OGG Constructor"))
+                                            .map_err(|_| MissingElement("UDPSrc"))?;
+
+    let filesink = gstreamer::ElementFactory::make("filesink", Some("Write File as Ouput"))
+                                              .map_err(|_| MissingElement("UDPSrc"))?;
 
 
-    //Set rtpbin handlers
-    // Respond to determining payload type (audio, video)
-    rtpbin.connect("request-pt-map", false, |values| {
+
+       // Tell the filesrc what file to load
+       src.set_property("port", 1925);
+       src.set_property("caps",
+           &gstreamer::Caps::builder("application/x-rtp")
+                              .field("media", "audio")
+                              .field("clock-rate", 48000)
+                              .field("encoding-name", "OPUS")
+                              .build()
+       );
+       
+       filesink.set_property("location", "rust.ogg");
+       
+
+        pipeline.add_many(&[&src,
+                            &queue,
+                            &rtpbin,
+                            //&rtpopusdepay,
+                            //&opusparsein,
+                            //&opusdec,
+                            &audiomixer,
+                            &opusenc,
+                            &opusparseout,
+                            &oggmux,
+                            &filesink
+                            ])?;
+
+        //Link UDP source to rtpbin
+        //let rtp_udp_src_pad = src.static_pad("src");
+        //let rtp_recv_sink_pad = rtpbin.request_pad_simple("recv_rtp_sink_0");
+        //rtp_udp_src_pad.link(&rtp_recv_sink_pad).expect("Failed to link udpsrc to rtpsink0");
+
+
+        gstreamer::Element::link_many(&[&src,
+                                        &queue,
+                                        &rtpbin
+                                        ])?;
+
+        //gstreamer::Element::link_many(&[
+                                        //&rtpopusdepay,
+                                        //&opusparsein,
+                                        //&opusdec,
+                                        //&audiomixer,
+                                        //&opusenc,
+                                        //&opusparseout,
+                                        //&oggmux,
+                                        //&filesink
+                                        //])?;
+
+
+ //Set action to take when payload type is known to rtpbin
+ rtpbin.connect("request-pt-map", false, |values| {
         let pt = values[2]
-                 .get::<u32>()
-                 .expect("rtpbin new-storage signal values[2]");
+            .get::<u32>()
+            .expect("rtpbin \"new-storage\" signal values[2]");
         println!("RTPBin got payload of type {:?}", pt );
         match pt {
             100 => Some(
@@ -90,118 +181,124 @@ fn create_pipeline() -> Result<gstreamer::Pipeline, Error> {
         }
     });
 
-    // Respond to new pad added to rtpbin
-    // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
-    let pipeline_weak = pipeline.downgrade(); //Downgrade to use in function
-    rtpbin.connect_pad_added( move |_rtpbin, src_pad| {
+
+ //Set action to take when pad is added to rtpbin
+ // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
+        let clonepipe = pipeline.clone();	
+ rtpbin.connect_pad_added(
+   move |rtpbin, src_pad| {
         println!("New source pad added to RTPBin");
         println!("Creating new elements to handle new RTP stream");
-    
-       let pipeline_strong = match pipeline_weak.upgrade() {
-                     Some(pipeline) => pipeline,
-                     None => return
-         }; //Upgrade to use in function
-    
-        //Make elements that will handle this new incoming stream
-        let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay").build().expect("sht1");
-        let opusparsein = gstreamer::ElementFactory::make("opusparse").build().expect("sht2");
-        let opusdec = gstreamer::ElementFactory::make("opusdec").build().expect("sht3");
-    
-        //Add elements to the pipeline
-        pipeline_strong.add_many(&[&rtpopusdepay,
-                                   &opusparsein,
-                                   &opusdec]).expect("Can not add to ppelne!");
+  
+        //Make rtpopusdepay, opus parsein, opusdec elements
+        let rtpopusdepay = gstreamer::ElementFactory::make("rtpopusdepay", Some("RTP Opus Depay"))
+                           .expect("Can not make RTP opus depayloader for new RTP media");
+        let opusparsein = gstreamer::ElementFactory::make("opusparse", Some("Opus Input Parser"))
+                          .expect("Can not make opus parser for new RTP media");
+        let opusdec = gstreamer::ElementFactory::make("opusdec", Some("Opus Decode"))
+                      .expect("Can not make opus decoder for new RTP media");
 
-        //Link the elements from the depayload to the output
+        clonepipe.add_many(&[&rtpopusdepay,
+                            &opusparsein,
+                            &opusdec])
+                .expect("Can not add elements to pipeline!");
+
+
+        //Connect sourcepad to depayloader
+        match connect_rtpbin_srcpad(src_pad, &rtpopusdepay) {
+            Ok(_) => (),
+            Err(err) => {
+                element_error!(
+                    rtpbin,
+                    gstreamer::LibraryError::Failed,
+                    ("Failed to link srcpad"),
+                    ["{}", err]
+                );
+            }
+        }
         gstreamer::Element::link_many(&[&rtpopusdepay,
                                         &opusparsein,
                                         &opusdec,
                                         &audiomixer,
                                         &opusenc,
                                         &opusparseout,
-                                        &rtpopuspay,
-                                        &udpsink
-                                       ]).expect("Can not link new elements to pipeline!");
-
-
-        //Connect new rtpbin srcpad to the linked elements
-        // (this completes the pipe from the new media to the end output)
-        println!("LOL CONNECTING PAD??");
-        let name = src_pad.name();
-        let split_name = name.split('_');
-        let split_name = split_name.collect::<Vec<&str>>();
-        let pt = split_name[5].parse::<u32>().expect("Can't parse src pad name!");
-
-        match pt {
-            96 => {
-                println!("Lnk 96 YAY!");
-                let sinkpad = rtpopusdepay.static_pad("sink").expect("Can't get static pad!");
-                src_pad.link(&sinkpad).expect("Can't link src_pad!");
-            }
-            100 => {
-                println!("Lnk 100 YAY!");
-                let sinkpad = rtpopusdepay.static_pad("sink").expect("Can't get static pad!");
-                src_pad.link(&sinkpad).expect("Can't link src_pad!");
-            }
-            _ => Err::<(), Error>(Error::from(UnknownPT(pt))).unwrap(),
-        };
-    
+                                        &oggmux,
+                                        &filesink
+                                        ]);
     });
 
-    Ok(pipeline)
-}
 
-//Gstreamer loop
-fn loop_pipeline(pipeline: gstreamer::Pipeline) -> Result<(), Error> {
-    pipeline.set_state(gstreamer::State::Playing)?;
 
-    let bus = pipeline
-        .bus()
-        .expect("Pipeline without bus. Shouldn't happen!");
+        //Play Gstreamer pipeline
+        pipeline.set_state(gstreamer::State::Playing);
 
+        //Expect pipeline has bus
+        let bus = pipeline
+                  .bus()
+                  .expect("Pipeline without bus. Shouldn't happen!");
+
+    //Loop and move pipeline forward
     for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
-        use gstreamer::MessageView;
 
         match msg.view() {
-            //MessageView::Eos(..) => break,
+            MessageView::Eos(..) => break,
             MessageView::Error(err) => {
-                pipeline.set_state(gstreamer::State::Null)?;
+                pipeline
+                    .set_state(gstreamer::State::Null)
+                    .expect("Unable to set the pipeline to the `Null` state");
+
                 return Err(ErrorMessage {
                     src: msg
                         .src()
-                        .map(|s| s.path_string())
-                        .unwrap_or_else(|| glib::GString::from("UNKNOWN")),
-                    error: err.error(),
+                        .map(|s| String::from(s.path_string()))
+                        .unwrap_or_else(|| String::from("None")),
+                    error: err.error().to_string(),
                     debug: err.debug(),
+                    source: err.error(),
                 }
                 .into());
             }
-            MessageView::StateChanged(state) => {
-                println!("{:?}", state);
+            MessageView::StateChanged(s) => {
+                if let Some(element) = msg.src() {
+                    if element == pipeline && s.current() == gstreamer::State::Playing {
+                        eprintln!("PLAYING");
+                        gstreamer::debug_bin_to_dot_file(
+                            &pipeline,
+                            gstreamer::DebugGraphDetails::all(),
+                            "client-playing",
+                        );
+                    }
+                }
             }
-            MessageView::StreamStatus(status) => {
-                println!("Received new status change: {:?}", status);
+            MessageView::Warning(s) => {
+              println!("Warning: {:?}", msg.src() )
             }
-            MessageView::NewClock(clock) => {
-                println!("Received new clock change: {:?}", clock);
+            MessageView::Info(s) => {
+              println!("Warning: {:?}", msg.src() )
             }
-            _ => {
-                println!("Received message of type: {:?}", msg.type_());
+            MessageView::Tag(s) => {
+              println!("Tag: {:?}", msg.src() )
+            }
+            MessageView::StreamStatus(s) => {
+              println!("Stream Status: {:?} and then {:?}", msg, s );
+              println!("-----")
             }
 
+            _ => {println!("Unknown {:?}", msg )},
         }
     }
-    pipeline.set_state(gstreamer::State::Null)?;
+
+    pipeline
+        .set_state(gstreamer::State::Null)
+        .expect("Unable to set the pipeline to the `Null` state");
 
     Ok(())
 }
 
-
-
 fn main() {
-  match create_pipeline().and_then(loop_pipeline) {
+  match run_pipeline() {
       Ok(r) => r,
       Err(e) => eprintln!("Error! {}", e)
   }
-  println!("Gstreamer process complete.");
+  println!("Gstreamer Is gone");
 }
