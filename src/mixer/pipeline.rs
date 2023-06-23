@@ -75,7 +75,7 @@ impl AudioMixerPipeline {
             .field("media", "audio")
             .field("clock-rate", 48000)
             .field("encoding-name", "OPUS")
-            .field("payload", 96)
+            .field("payload", 100)
             .build();
         src.set_property("port", 1925); //TODO: Get this from signaling
         src.set_property("caps", &audio_caps);
@@ -115,7 +115,7 @@ impl AudioMixerPipeline {
                         .build()
                         .to_value(),
                 ),
-                96 => Some(
+                106 => Some(
                     gstreamer::Caps::builder("application/x-rtp")
                         .field("media", "video")
                         .field("clock-rate", 90000i32)
@@ -172,6 +172,7 @@ impl AudioMixerPipeline {
                 &udpsink, //&oggmux,
                           //&filesink
             ]);
+            rtpopuspay.set_property("pt", 100);
 
             //Connect new rtpbin srcpad to the linked elements
             // (this completes the pipe from the new media to the end output)
