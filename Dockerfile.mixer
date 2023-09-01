@@ -1,0 +1,30 @@
+FROM rust as builder
+
+RUN apt-get update && \
+    apt-get install -y libgstreamer1.0-dev && \
+    apt-get clean
+
+
+#Default connect to development, not production
+ENV signalingserver=dev.framevr.io
+
+WORKDIR /app
+COPY ./ ./
+
+RUN cargo build --release
+
+#runing image
+FROM debian:stable
+
+RUN apt-get update && \
+    apt-get install -y gstreamer1.0-plugins-good \
+                       gstreamer1.0-plugins-bad && \
+    apt-get clean
+
+#copy the binary to the container
+WORKDIR /app
+RUN pwd && ls
+COPY --from=builder /app/target/release/gmix /app/gmix
+
+RUN chmod +x gmix
+ENTRYPOINT ["./gmix", "-u", "${signalingserver}:1188"]

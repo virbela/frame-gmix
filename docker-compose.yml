@@ -1,0 +1,12 @@
+version: "2"
+services:
+  audiomixer:
+    build:
+      context: .
+      dockerfile: Dockerfile.mixer
+    environment:
+      - RUST_LOG=debug
+    #volumes:
+    #  - ./:/app
+    network_mode: host
+    entrypoint: ["./gmix", "-u", "127.0.0.1:1188"]
