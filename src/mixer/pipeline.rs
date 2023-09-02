@@ -70,7 +70,6 @@ impl AudioMixerPipeline {
         let udpsink = ElementFactory::make("udpsink")
             .build()
             .expect("failed to create UDPSink");
-
         let audio_caps = gstreamer::Caps::builder("application/x-rtp")
             .field("media", "audio")
             .field("clock-rate", 48000)
@@ -84,8 +83,7 @@ impl AudioMixerPipeline {
         udpsink.set_property("host", "127.0.0.1"); //TODO: Get this from signaling
                                                    //udpsink.set_property("host", "127.0.0.1")?; //TODO: Get this from signaling
         udpsink.set_property("port", 1928); //TODO: Get this from signaling
-
-        // Add elements to the pipeline
+                                            // Add elements to the pipeline
         pipeline.add_many(&[
             &src,
             &rtpbin,
@@ -127,20 +125,41 @@ impl AudioMixerPipeline {
         });
 
         //This is the outgoing SSRC to egress. Send this value to egres
-        rtpbin.connect("on-new-sender-ssrc", false, |values| {
-            println!("ON NEW SENDER SSRC!!! {:?}", values);
-            None
-        });
+        // rtpbin.connect("on-new-sender-ssrc", false, |values| {
+        //     println!("@@ON NEW SENDER SSRC!!! {:?}", values);
+        //     if let [_, _, ssrc_value] = values {
+        //         if let Ok(ssrc) = ssrc_value.get::<u32>() {
+        //             println!("SSRC Value: {}", ssrc);
+        //         } else {
+        //             println!("Failed to extract SSRC value.");
+        //         }
+        //     }
+        //     None
+        // });
 
         //This is incoming from ingress... dont use?
-        rtpbin.connect("on-ssrc-validated", false, |values| {
-            println!("ON SSRC VALIDATED!!! {:?}", values);
-            None
-        });
+        // rtpbin.connect("on-ssrc-validated", false, |values| {
+        //     println!("@@ON SSRC VALIDATED!!! {:?}", values);
+        //     if let [_, _, ssrc_value] = values {
+        //         if let Ok(ssrc) = ssrc_value.get::<u32>() {
+        //             println!("on new SSRC Value: {}", ssrc);
+        //         } else {
+        //             println!("Failed to extract SSRC value.");
+        //         }
+        //     }
+        //     None
+        // });
 
         //This is a new ssrc from ingress. Dont send this one
         rtpbin.connect("on-new-ssrc", false, |values| {
             println!("ON NEW SSRC!!! {:?}", values);
+            if let [_, _, ssrc_value] = values {
+                if let Ok(ssrc) = ssrc_value.get::<u32>() {
+                    println!("on new SSRC Value: {}", ssrc);
+                } else {
+                    println!("Failed to extract SSRC value.");
+                }
+            }
             None
         });
         rtpbin.connect("on-ssrc-sdes", false, |values| {
@@ -148,13 +167,11 @@ impl AudioMixerPipeline {
             None
         });
 
-
         // Some payload type changed?
         rtpbin.connect("payload-type-change", false, |values| {
             println!("ON PAYLOAD CHANGE!!!! {:?}", values);
             None
         });
-
 
         //Set action to take when pad is added to rtpbin
         // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
