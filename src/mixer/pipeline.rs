@@ -75,7 +75,6 @@ impl AudioMixerPipeline {
             .field("media", "audio")
             .field("clock-rate", 48000)
             .field("encoding-name", "OPUS")
-            .field("payload", 100)
             .build();
         src.set_property("port", 1925); //TODO: Get this from signaling
         src.set_property("caps", &audio_caps);
@@ -127,10 +126,35 @@ impl AudioMixerPipeline {
             }
         });
 
-        rtpbin.connect("on-ssrc-sdes", false, |values| {
-            println!("NEW SESSION DATA!!! {:?}", values);
+        //This is the outgoing SSRC to egress. Send this value to egres
+        rtpbin.connect("on-new-sender-ssrc", false, |values| {
+            println!("ON NEW SENDER SSRC!!! {:?}", values);
             None
         });
+
+        //This is incoming from ingress... dont use?
+        rtpbin.connect("on-ssrc-validated", false, |values| {
+            println!("ON SSRC VALIDATED!!! {:?}", values);
+            None
+        });
+
+        //This is a new ssrc from ingress. Dont send this one
+        rtpbin.connect("on-new-ssrc", false, |values| {
+            println!("ON NEW SSRC!!! {:?}", values);
+            None
+        });
+        rtpbin.connect("on-ssrc-sdes", false, |values| {
+            println!("ON SSRC SDES!!! {:?}", values);
+            None
+        });
+
+
+        // Some payload type changed?
+        rtpbin.connect("payload-type-change", false, |values| {
+            println!("ON PAYLOAD CHANGE!!!! {:?}", values);
+            None
+        });
+
 
         //Set action to take when pad is added to rtpbin
         // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
@@ -172,7 +196,7 @@ impl AudioMixerPipeline {
                 &udpsink, //&oggmux,
                           //&filesink
             ]);
-            rtpopuspay.set_property("pt", 100);
+            //rtpopuspay.set_property("pt", 100);
 
             //Connect new rtpbin srcpad to the linked elements
             // (this completes the pipe from the new media to the end output)
@@ -300,7 +324,6 @@ impl AudioMixerPipeline {
 
 // Connect source pad to rtpbin
 fn connect_rtpbin_srcpad(src_pad: &gstreamer::Pad, sink: &gstreamer::Element) -> Result<(), Error> {
-    println!("LOL CONNECTING PAD??");
     let name = src_pad.name();
     let split_name = name.split('_');
     let split_name = split_name.collect::<Vec<&str>>();
@@ -308,10 +331,8 @@ fn connect_rtpbin_srcpad(src_pad: &gstreamer::Pad, sink: &gstreamer::Element) ->
 
     match pt {
         100 => {
-            println!("LOL 100 YAY!");
+            println!("Payload type is 100 YAY!");
             let sinkpad = static_pad(sink, "sink");
-            println!("SINK PAD IS: {:?}", sinkpad);
-            println!("SRC PAD IS: {:?}", src_pad);
             let _ = src_pad.link(&sinkpad.unwrap());
             Ok(())
         }
