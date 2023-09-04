@@ -2,7 +2,9 @@ use anyhow::Error;
 use derive_more::{Display, Error};
 use glib::translate::FromGlib;
 use gstreamer::traits::ElementExt;
-use gstreamer::{element_error, prelude::*, Element, MessageView};
+use gstreamer::{
+    element_error, prelude::*, Element, MessageView, PadProbeData, PadProbeReturn, PadProbeType,
+};
 use gstreamer::{ElementFactory, Pipeline};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -137,7 +139,7 @@ impl AudioMixerPipeline {
         //     None
         // });
 
-        //This is incoming from ingress... dont use?
+        // This is incoming from ingress... dont use?
         // rtpbin.connect("on-ssrc-validated", false, |values| {
         //     println!("@@ON SSRC VALIDATED!!! {:?}", values);
         //     if let [_, _, ssrc_value] = values {
@@ -149,29 +151,78 @@ impl AudioMixerPipeline {
         //     }
         //     None
         // });
+        // let rtpbin_clone = rtpbin.clone();
+        // rtpbin.connect_pad_added(move |_element, new_pad| {
+        //     if new_pad.name() == "send_rtp_src_0" {
+        //         let srcpad = rtpbin_clone.static_pad("send_rtp_src_0").unwrap();
+        //         srcpad.add_probe(PadProbeType::BUFFER, |_pad, _info| {
+        //             if let Some(PadProbeData::Buffer(ref buffer)) = _info.data {
+        //                 // Use the buffer
+        //                 if let Some(map) = buffer.map_readable().ok() {
+        //                     let ssrc = u32::from_be_bytes([map[8], map[9], map[10], map[11]]);
+        //                     println!("&&&&&&& SSRC: {}", ssrc)
+        //                 }
+        //             }
+        //             PadProbeReturn::Ok
+        //         });
+        //     }
+        // });
+        let pipeline_clone = pipeline.clone();
+        let rtpopuspay_clone = rtpopuspay.clone();
+        // rtpbin.connect("on-ssrc-active", false, move |values| {
+        //     println!("@@ON SSRC on-ssrc-active!!! {:?}", values);
+        //     let elements = pipeline_clone.iterate_elements();
+        //     for element in elements {
+        //         println!("Element name: {:?}", element.unwrap().name());
+        //     }
+
+        //     if let [_, _, ssrc_value] = values {
+        //         if let Ok(ssrc) = ssrc_value.get::<u32>() {
+        //             println!("on new SSRC Value: {}", ssrc);
+        //         } else {
+        //             println!("Failed to extract SSRC value.");
+        //         }
+        //     }
+        //     None
+        // });
+
+        let rtpopuspay_srcpad = rtpopuspay_clone
+            .static_pad("src")
+            .expect("Failed to get src pad from rtpopuspay0");
+        rtpopuspay_srcpad.add_probe(PadProbeType::BUFFER, |_pad, info| {
+            if let Some(PadProbeData::Buffer(ref buffer)) = &info.data {
+                let map = buffer
+                    .map_readable()
+                    .expect("Failed to map buffer readable");
+                let ssrc = u32::from_be_bytes([map[8], map[9], map[10], map[11]]);
+                println!("@@@@@SSRC: {}", ssrc);
+                return PadProbeReturn::Remove;
+            }
+            PadProbeReturn::Ok
+        });
 
         //This is a new ssrc from ingress. Dont send this one
-        rtpbin.connect("on-new-ssrc", false, |values| {
-            println!("ON NEW SSRC!!! {:?}", values);
-            if let [_, _, ssrc_value] = values {
-                if let Ok(ssrc) = ssrc_value.get::<u32>() {
-                    println!("on new SSRC Value: {}", ssrc);
-                } else {
-                    println!("Failed to extract SSRC value.");
-                }
-            }
-            None
-        });
-        rtpbin.connect("on-ssrc-sdes", false, |values| {
-            println!("ON SSRC SDES!!! {:?}", values);
-            None
-        });
+        // rtpbin.connect("on-new-ssrc", false, move |values| {
+        //     println!("ON NEW SSRC!!! {:?}", values);
+        //     if let [_, _, ssrc_value] = values {
+        //         if let Ok(ssrc) = ssrc_value.get::<u32>() {
+        //             println!("on new SSRC Value: {}", ssrc);
+        //         } else {
+        //             println!("Failed to extract SSRC value.");
+        //         }
+        //     }
+        //     None
+        // });
+        // rtpbin.connect("on-ssrc-sdes", false, |values| {
+        //     println!("ON SSRC SDES!!! {:?}", values);
+        //     None
+        // });
 
-        // Some payload type changed?
-        rtpbin.connect("payload-type-change", false, |values| {
-            println!("ON PAYLOAD CHANGE!!!! {:?}", values);
-            None
-        });
+        // // Some payload type changed?
+        // rtpbin.connect("payload-type-change", false, |values| {
+        //     println!("ON PAYLOAD CHANGE!!!! {:?}", values);
+        //     None
+        // });
 
         //Set action to take when pad is added to rtpbin
         // (connect this pad to a depayloader, parser, decoder, and then into the mixer)
