@@ -246,10 +246,26 @@ impl AudioMixerPipeline {
             let opusdec = gstreamer::ElementFactory::make("opusdec")
                 .build()
                 .expect("Can not make opus decoder for new RTP media");
-
+            // Create the webrtcdsp element for echo cancellation
+            let webrtcdsp = gstreamer::ElementFactory::make("webrtcdsp")
+                .build()
+                .expect("Failed to create webrtcdsp");
+            let echo_probe = gstreamer::ElementFactory::make("webrtcechoprobe")
+                .build()
+                .expect("Failed to create webrtcechoprobe element");
+            webrtcdsp
+                .link(&echo_probe)
+                .expect("Failed to link webrtcdsp and echo probe");
+            // Add the webrtcdsp element to the pipeline
             //Add elements to the pipeline
             pipeline_strong
-                .add_many(&[&rtpopusdepay, &opusparsein, &opusdec])
+                .add_many(&[
+                    &rtpopusdepay,
+                    &opusparsein,
+                    &opusdec,
+                    &webrtcdsp,
+                    &echo_probe,
+                ])
                 .expect("Can not add elements to pipeline!");
 
             //Link the elements from the depayload to the output
@@ -257,6 +273,7 @@ impl AudioMixerPipeline {
                 &rtpopusdepay,
                 &opusparsein,
                 &opusdec,
+                // &webrtcdsp,
                 &audiomixer,
                 &opusenc,
                 &opusparseout,
